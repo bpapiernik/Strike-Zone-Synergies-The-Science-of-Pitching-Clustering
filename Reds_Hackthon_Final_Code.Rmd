@@ -1,0 +1,1753 @@
+---
+title: 'Strike Zone Synergies: The Science of Pitching Clustering'
+author: "Ben Scartz, Brian Papiernik, Jack Arbuckle"
+date: "2024-02-06"
+output: html_document
+---
+
+![](Cincinnati-Reds-Logo-1972.jpg)
+
+### Fangraphs Cleaning
+
+
+When cleaning, we ran into the issue that some pitchers would appear in both the role as RP and SP for the same year which affected our pitcher_roles categorization later. So, we created two dataframes (sp_fangraphs and rp_fangraphs) that filter for those specific roles. Next, we joined by Year and MLBAMID that appeared in both sp_fangraphs and rp_fangraphs to get only the pitchers that appeared in both roles for that specific year
+
+In this code, we created weights based on the percentage of TBF as SP divided by total TBF and percentage of TBF as RP divided by total TBF. Then, we applied the SP TBF weights and RP TBF weights to the corresponding non-sum variables for SP (ends in .x) and RP (ends in .y). After, we created new columns for each pitcher in each year based on summing the matching columns that end in both .x and .y with the newly applied weights to all their respective columns and created a new dataset that only included the newly summed columns on the newly applied weights. (final_dataset)
+
+Next, we created two new dataframes (sp_not_in_rp and rp_not_in_sp) that anti-joined on sp_fangraphs and rp_fangraphs. After, we combine the two sets of unique rows into one data frame (combined_not_in_both).
+
+In joined_data2, we  select columns 10 to 47 and 316 to 353 which are just the sum statistics from `joined_data` and assign to `joined_data2.` We then create new columns by summing the matching columns that end in both .x and .y for the sum statistics. We then select only the newly summed columns
+
+In joined_data3, we selected the characteristics stats for everyone in joined_data
+
+Finally, we merged all the 3 datasets (joined_data3, joined_data2, final_dataset) together and bind the rows for the (combined_not_in_both) to the newly combined 3 dataset 
+
+```{r}
+# Load data and libraries
+library(tidyverse)
+statcast <- read_csv('savant_pitch_level.csv')
+fangraphs_table <- read.csv('fangraphs_season_level.csv')
+```
+
+
+
+```{r}
+#Filter the 'fangraphs_table' for starting pitchers (SP) and assign to 'sp_fangraphs'
+
+sp_fangraphs <- fangraphs_table %>%
+  filter(Role == "SP")
+
+#Filter the 'fangraphs_table' for starting pitchers (RP) and assign to 'rp_fangraphs'
+
+rp_fangraphs <- fangraphs_table %>%
+  filter(Role == "RP")
+
+
+
+# Join 'sp_fangraphs' and 'rp_fangraphs' on 'Season' and 'MLBAMID'
+
+joined_data <- inner_join(sp_fangraphs, rp_fangraphs, by = c("Season", "MLBAMID"))
+
+# Add new columns to 'joined_data': 'totalTBF', 'SPweightTBF', and 'RPweightTBF'
+
+joined_data <- joined_data %>%
+  mutate(totalTBF = TBF.x + TBF.y, #adding Total Batters Faced as a reliever and as a starter
+         SPweightTBF = TBF.x / totalTBF, #creates a weighted starter TBF based on TBF as a starter divided by total TBF
+         RPweightTBF = 1 - SPweightTBF) #creates a weighted reliever TBF based on 1 minus weighted starter TBF
+head(joined_data)
+
+joined_data1 <- joined_data %>%
+  select(c(48:135,137:138, 140:309,354:441,443:444,446:617))
+head(joined_data1)
+
+```
+
+```{r}
+# Perform an anti-join to find starting pitchers not in relief pitchers data
+
+sp_not_in_rp <- anti_join(sp_fangraphs, rp_fangraphs, by = c("Season", "MLBAMID"))
+
+# Perform an anti-join to find relief pitchers not in starting pitchers data
+
+rp_not_in_sp <- anti_join(rp_fangraphs, sp_fangraphs, by = c("Season", "MLBAMID"))
+
+# Combine the two sets of unique rows into one data frame
+
+combined_not_in_both <- bind_rows(sp_not_in_rp, rp_not_in_sp)
+
+```
+
+
+
+
+
+
+
+```{r}
+library(dplyr)
+library(stringr)
+
+
+# Create a new dataset by applying weights to columns ending with .x and .y
+
+
+new_dataset <- joined_data1 %>% # 3. Start a chain operation on joined_data1
+  mutate(across(ends_with(".x"), ~ . * SPweightTBF, .names = "weighted_{.col}")) %>% #  Multiply all .x columns by SPweightTBF and prefix new column names with "weighted_"
+  
+  
+  mutate(across(ends_with(".y"), ~ . * RPweightTBF, .names = "weighted_{.col}")) #  Multiply all .y columns by RPweightTBF and prefix new column names with "weighted_"
+
+# Identify columns that end with .x and are prefixed with "weighted_" for further processing
+
+x_cols <- names(new_dataset)[str_detect(names(new_dataset), "^weighted_.*\\.x$")] #  Detect and store names of weighted .x columns
+
+y_cols <- str_replace(x_cols, "\\.x$", ".y") # Replace .x in column names with .y to match corresponding columns
+
+# Check if all corresponding .y columns exist in the dataset
+
+if(!all(y_cols %in% names(new_dataset))) { 
+  stop("Some .y columns are missing.") 
+}
+
+# Loop through each pair of .x and .y columns to create new columns by adding them together
+
+for(i in seq_along(x_cols)) { # Iterate over all .x column names
+  
+  new_col_name <- str_replace(x_cols[i], "weighted_", "") # Remove "weighted_" prefix from the column name
+  
+  new_col_name <- str_replace(new_col_name, "\\.x$", "") # Remove ".x" suffix from the column name
+  
+  new_dataset[[new_col_name]] <- new_dataset[[x_cols[i]]] + new_dataset[[y_cols[i]]] #  Create a new column by summing the .x and .y columns
+}
+
+
+
+```
+
+```{r}
+
+final_dataset <- new_dataset[1042:1300] #Subset `new_dataset` to include only columns 1042 to 1300 and assign to `final_dataset`
+
+joined_data2 <- joined_data %>% 
+  select(10:47,316:353) #  Select columns 10 to 47 and 316 to 353 which are just the sum statistics from `joined_data` and assign to `joined_data2`
+  
+# Identify columns that end with .x and .y
+x_cols <- names(joined_data2)[str_detect(names(joined_data2), "\\.x$")] #Detect and store names of columns ending with .x in `joined_data2`
+
+y_cols <- str_replace(x_cols, "\\.x$", ".y") # Replace .x in column names with .y to match corresponding columns
+
+# Check if all y_cols exist
+if(!all(y_cols %in% names(joined_data2))) { 
+  stop("Some .y columns are missing.") 
+}
+
+#create new columns
+for(i in seq_along(x_cols)) { # Iterate over all .x column names
+  new_col_name <- str_replace(x_cols[i], "\\.x$", "") # Remove ".x" suffix from the column name to create a new column name
+  
+  joined_data2[[new_col_name]] <- joined_data2[[x_cols[i]]] + joined_data2[[y_cols[i]]] # Sum the corresponding .x and .y columns and assign to a new column in `joined_data2`
+}
+
+joined_data2 <- joined_data2 %>% 
+  select(77:114) # Select columns 77 to 114 from the modified `joined_data2`
+
+head(joined_data2) # 13. Display the first few rows of the modified `joined_data2`
+
+joined_data3 <- joined_data %>% 
+  select(1:9) %>% #  Select the first 9 columns of `joined_data`
+  rename(PlayerId = PlayerId.x, 
+         Name = Name.x,
+         NameASCII = NameASCII.x, 
+         Throws = Throws.x, 
+         Age = Age.x, 
+         Team = Team.x, 
+         Role = Role.x) 
+
+
+```
+
+
+
+
+```{r}
+
+combined_dataset <- bind_cols(joined_data2, final_dataset) # 1. Combine `joined_data2` and `final_dataset` side by side into a new dataframe `combined_dataset`
+
+final_combined_dataset <- bind_cols(joined_data3, joined_data2, final_dataset) # 2. Combine `joined_data3`, `joined_data2`, and `final_dataset` side by side into another new dataframe `final_combined_dataset`
+
+combined_not_in_both <- combined_not_in_both %>% 
+  select(-c(136,139)) #Remove columns 136 and 139 from `combined_not_in_both`
+
+
+```
+```{r}
+#bind the rows on top of each other for the two datasets because they have the same column names
+total_combined_dataset <- bind_rows(final_combined_dataset, combined_not_in_both)
+
+
+```
+
+
+
+
+```{r}
+write.csv(total_combined_dataset, 'fangraphs_cleaned.csv')
+```
+
+
+
+## Step 2: Classify pitchers by roles
+
+
+
+
+
+### Roles:
+
+* Innings
+  + opener/starter
+  + Middle
+  + Late
+  + Closer
+  
+* Length
+  + Start
+  + Long
+  + 1 inning/minimum
+  
+* Leverage
+  + High
+  + None
+  + Low
+
+* Matchup
+  + R/L split
+  + Best hitters
+  
+
+  
+
+```{r include=FALSE}
+library(tidyverse)
+```
+
+
+```{r}
+# Load data and libraries
+#library(tidyverse)
+statcast <- read_csv('savant_pitch_level.csv')
+fangraphs_table <- read.csv('fangraphs_cleaned.csv')
+```
+  
+
+###############################################################################
+########################## Innings ############################################
+###############################################################################
+
+* Opener / starter
+
+  + >75% of appearances begin in the 1st inning
+  
+* Middle
+
+  + >75% of appearances begin in the 2nd-6th innings
+
+* Late
+
+  + >75% of appearances begin in the 7th-9th innings
+  
+* Closer 
+
+  + >90% of appearances begin in the 9th inning
+  
+
+
+
+```{r}
+#create a dataframe called inning_roles
+
+innings_roles <- data.frame()
+
+# Extract unique combinations of pitchers and game years from the statcast dataset
+
+pitchers_df <- unique(statcast[c('pitcher', 'game_year')])
+
+# Loop through each row in the pitcher_df dataframe
+
+for(row in 1:nrow(pitchers_df)){
+
+# Extract pitcher names and game year for each row  
+  
+pitcher_name <- pitchers_df$pitcher[row]
+game_year <- pitchers_df$game_year[row]
+
+# Filter the statcast dataset for entries matching the current pitcher and year
+  
+player_data <- filter(statcast, pitcher == pitcher_name, game_year == game_year)
+
+# Calculate the first inning pitched in each game and classify innings
+
+table <- player_data %>%
+  group_by(game_pk) %>%
+  summarize(inning = min(inning)) %>%
+  group_by(inning) %>%
+  summarize(apps = n(),
+            total = nrow(.),
+            percentage = n() / nrow(.))
+
+# Assign roles based on the inning number
+
+table <- table %>%
+  mutate(class = case_when(inning == 1 ~ 'start',
+                                  inning >= 2 &
+                                    inning <= 7 ~ 'middle',
+                                  inning >= 8  ~ 'late'))
+
+# Aggregate percentages by class to determine the pitcher's role
+
+classes <- table %>%
+  group_by(class) %>%
+  summarize(percentage = sum(percentage))
+
+# Calculate the percentage for each role, defaulting to 0 if not present
+
+  start_percentage <- ifelse('start' %in% classes$class, classes$percentage[classes$class == 'start'], 0)
+  middle_percentage <- ifelse('middle' %in% classes$class, classes$percentage[classes$class == 'middle'], 0)
+  late_percentage <- ifelse('late' %in% classes$class, classes$percentage[classes$class == 'late'], 0)
+  close_percentage <- ifelse('close' %in% classes$class, classes$percentage[classes$class == 'close'], 0)
+
+# Determine the pitcher's role based on the highest percentage among start, middle, and late
+  
+new_row <- data.frame(pitcher = pitcher_name,
+                      year = game_year,
+                          role = if_else(start_percentage > 0.70, 'start',
+                                  if_else(middle_percentage > 0.70, 'middle',
+                                   if_else(late_percentage > 0.70, 'late', 'none'))))
+
+# Add the new row to the innings_roles dataframe
+
+innings_roles <- rbind(innings_roles, new_row)
+}
+```
+
+###############################################################################
+########################## Length #############################################
+###############################################################################
+
+* Short 
+
+  + 1-25 pitches
+  
+* Medium 
+
+  + 26-40
+  
+* Long
+
+  + >40 pitches
+
+```{r}
+
+# Initalize an empty dataframe for pitching length
+
+length_roles <- data.frame()
+
+# Extract unique combinations of pitchers and game years from the statcast dataset
+
+pitchers_df <- unique(statcast[c('pitcher', 'game_year')])
+
+# Loop through each row in the pitchers_df dataframe
+
+for(row in 1:nrow(pitchers_df)){
+  
+# Extract the pitcher's name and game year from each row
+
+pitcher_name <- pitchers_df$pitcher[row]
+game_year <- pitchers_df$game_year[row]
+  
+# Filter the statcast dataset for records matching the current pitcher and year
+
+player_data <- filter(statcast, pitcher == pitcher_name, game_year == game_year)
+
+# Calculate the length of appearance in each game and group by length
+
+table <- player_data %>%
+  group_by(game_pk) %>%
+  summarize(length = n()) %>%
+  group_by(length) %>%
+  summarize(total = nrow(.),
+            percentage = n() / nrow(.))
+
+# Classify the length of appearances into short, medium, or long
+
+table <- table %>%
+  mutate(class = case_when(length <= 25 ~ 'short',
+                                  length > 25 &
+                                    length <= 40 ~ 'medium',
+                                  length > 40  ~ 'long'))
+
+# Aggregate percentages by class to determine the pitcher's length role
+
+classes <- table %>%
+  group_by(class) %>%
+  summarize(percentage = sum(percentage))
+
+# Calculate the percentage for each length role, defaulting to 0 if not present
+
+  short_percentage <- ifelse('short' %in% classes$class, classes$percentage[classes$class == 'short'], 0)
+  medium_percentage <- ifelse('medium' %in% classes$class, classes$percentage[classes$class == 'medium'], 0)
+  long_percentage <- ifelse('long' %in% classes$class, classes$percentage[classes$class == 'long'], 0)
+
+# Determine the pitcher's length role based on the highest percentage  
+  
+new_row <- data.frame(pitcher = pitcher_name,
+                      year = game_year,
+                          role = if_else(short_percentage > 0.60, 'short',
+                                  if_else(medium_percentage > 0.60, 'medium',
+                                   if_else(long_percentage > 0.60, 'long', 'none'))))
+
+# Append the new row to the length_roles dataframe
+
+length_roles <- rbind(length_roles, new_row)
+}
+
+# Update length_roles dataframe based on specific conditions and join with innings_roles
+
+length_roles <- innings_roles %>%
+  left_join(length_roles, by = c('pitcher', 'year')) %>%
+  filter(role.x != 'start') %>%
+  select(-role.x) %>%
+  rename(role = role.y)
+  
+```
+
+###############################################################################
+########################## Leverage ###########################################
+###############################################################################
+  
+* High 
+
+  + gmLI > 1.1704 (Q3)
+  
+* None
+  
+  + 1.1704 < gmLI < 0.8788
+
+* Low 
+
+  + gmLI < 0.8788
+  
+```{r}
+#Select relevant columns from fangraphs_table
+
+leverage_table <- fangraphs_table %>%
+  select(MLBAMID, NameASCII, Season, gmLI, IP)
+
+# Calculate and display a summary of the gmLI values for pitchers with more than 25 IP
+
+summary(filter(leverage_table, IP > 25)$gmLI)
+
+```
+
+```{r}
+# Categorize pitchers into leverage roles based on their gmLI and rename columns for clarity
+
+leverage_roles <- leverage_table %>%
+  mutate(role = case_when(gmLI > 1.1704 ~ 'high',
+                          gmLI < 1.1704 & 
+                            gmLI > 0.8788 ~ 'none',
+                          gmLI < 0.8788 ~ 'low')) %>%
+  rename(pitcher = MLBAMID,
+         name = NameASCII,
+         year = Season)
+
+# Update leverage_roles with innings_roles, filter out 'start' roles, and adjust column naming
+
+leverage_roles <- innings_roles %>%
+  left_join(leverage_roles, by = c('pitcher', 'year')) %>%
+  filter(role.x != 'start') %>%
+  select(-role.x) %>%
+  rename(role = role.y)
+
+```
+
+###############################################################################
+########################## Matchups ###########################################
+###############################################################################
+
+* RHH
+
+  + > 66% of batters faced are RHH
+  
+* LHH
+
+  + > 50% of batters faced are LHH
+  
+```{r message=FALSE, warning=FALSE}
+
+# Initialize an empty dataframe to store matchup roles for pitchers
+
+matchup_roles <- data.frame()
+
+# Extract unique combinations of pitchers and game years from the statcast dataset
+
+pitchers_df <- unique(statcast[c('pitcher', 'game_year')])
+
+#Loop through each row in the pitcher_df dataframe
+
+for(row in 1:nrow(pitchers_df)){
+
+# Extract the pitcher's name and game year for the current row  
+  
+pitcher_name <- pitchers_df$pitcher[row]
+game_year <- pitchers_df$game_year[row]
+
+# Filter the statcast dataset for records matching the current pitcher and year
+  
+player_data <- filter(statcast, pitcher == pitcher_name, game_year == game_year)
+
+# Group by game and at-bat number, then summarize the batter's side for each at-bat
+
+table <- player_data %>%
+  group_by(game_pk, at_bat_number) %>%
+  summarize(batter_side = first(stand)) %>%
+  mutate(R = if_else(batter_side == 'R', 1, 0),
+         L = if_else(batter_side == 'L', 1, 0))
+  
+# Calculate the proportion of matchups against RHH and LHH
+
+R <- sum(table$R) / nrow(table)
+L <- sum(table$L) / nrow(table)
+         
+
+# Assign a role based on the proportion of RHH and LHH faced
+         
+new_row <- data.frame(pitcher = pitcher_name,
+                      year = game_year,
+                      role = case_when(R > 0.65 ~ 'RHH',
+                                       L > 0.50 ~ 'LHH',
+                                       TRUE ~ 'none'))
+
+# Append the new row to the matchup_roles dataframe
+
+matchup_roles <- rbind(matchup_roles, new_row)
+
+}
+
+#Update matchup_roles with innings_roles, filter out 'start' roles, and adjust column naming
+
+matchup_roles <- innings_roles %>%
+  left_join(matchup_roles, by = c('pitcher', 'year')) %>%
+  filter(role.x != 'start') %>%
+  select(-role.x) %>%
+  rename(role = role.y)
+```
+
+
+###############################################################################
+######################## Combine Roles ########################################
+###############################################################################
+
+```{r}
+#Rename the role columns in the dataframe
+
+matchup_roles <- rename(matchup_roles, matchup_role = role)
+leverage_roles <- rename(leverage_roles, leverage_role = role)
+length_roles <- rename(length_roles, length_role = role)
+innings_roles <- rename(innings_roles, inning_role = role)
+
+# Merge the roles dataframes on pitcher ID and year to create a comprehensive pitcher_roles dataframe
+
+pitcher_roles <- innings_roles %>%
+  left_join(matchup_roles, by = c('pitcher', 'year')) %>%
+  left_join(leverage_roles, by = c('pitcher', 'year')) %>%
+  left_join(length_roles, by = c('pitcher', 'year')) %>%
+  select(pitcher, year, inning_role, length_role, matchup_role, leverage_role)
+
+```
+
+
+```{r write csv}
+write.csv(pitcher_roles, 'pitcher_roles.csv')
+```
+
+
+## Step 3
+
+### Outline relevant characteristics
+
+* Pitch arsenal
+
+  + Usage
+  + Movement / velo
+  + VAA
+  + HAA
+  + Stuff
+  + # of plus stuff pitches
+  
+* Performance metrics
+
+  + xwOBA against (include Vs RHH/LHH)
+  + BB%
+  + K%
+  + K/out
+  + wFC_sc (wFC/C) etc.
+  
+ 
+```{r}
+# read in the data
+
+fangraphs_table <- read.csv('fangraphs_cleaned.csv') %>%
+  select(-X)
+
+```
+
+
+###############################################################################    ################################# Pitch Usages ################################ ###############################################################################
+
+```{r} 
+#Select the relevant columns for pitch usage
+
+pitch_usage <- fangraphs_table %>%
+  select(NameASCII,
+MLBAMID, Throws, IP, Season, FA_pct,SL_pct,CT_pct,CB_pct,CH_pct,SF_pct,KN_pct,XX_pct) %>%
+  rename(pitcher = MLBAMID,
+         year = Season,
+         name = NameASCII,
+         throws = Throws)
+```
+
+
+###############################################################################    ####################### Movement / velo by pitch ############################## ###############################################################################
+
+```{r}
+#Select the relevant columns for pitch characteristics (velo and movement)
+
+pitch_velo_movement<- fangraphs_table %>%
+  select(MLBAMID, Season, vFA_sc, vFC_sc,vFS_sc, vFO_sc, vSI_sc,vSL_sc,vCU_sc,vKC_sc,vEP_sc,vCH_sc,vSC_sc,vKN_sc,FA_X_sc,FC_X_sc,FS_X_sc,FO_X_sc,SI_X_sc,SL_X_sc,CU_X_sc,KC_X_sc,EP_X_sc,CH_X_sc,SC_X_sc,KN_X_sc,FA_Z_sc,FC_Z_sc,FS_Z_sc,FO_Z_sc,SI_Z_sc,SL_Z_sc,CU_Z_sc,KC_Z_sc
+,EP_Z_sc,CH_Z_sc,SC_Z_sc,KN_Z_sc) %>%
+  rename(pitcher = MLBAMID,
+         year = Season)
+
+```
+
+###############################################################################    ################################# VAA by pitch ################################ ###############################################################################
+
+```{r}
+#Create the Vertical Approach Angle statistic for each pitch
+statcast <- statcast %>%
+    mutate(
+    vy_f = -sqrt(vy0^2 - (2 * ay * (50 - (17/12)))),
+    t = (vy_f - vy0) / ay,
+    vz_f = vz0 + (az * t),
+    VAA = -atan(vz_f / vy_f) * (180 / pi)
+  )
+
+# Group data by pitcher, game year, and pitch type, then calculate the mean VAA for each group
+VAA_table <- statcast %>%
+  group_by(pitcher, game_year, pitch_type) %>%
+  summarise(mean_VAA = mean(VAA), .groups = 'drop') %>%  # Calculate mean VAA and drop grouping
+  mutate(pitch_type = ifelse(is.na(pitch_type) | pitch_type == "", "NA", pitch_type)) %>%  # Handle missing or empty pitch types
+  pivot_wider(id_cols = c("pitcher", "game_year"),  # Pivot the data to a wide format
+              names_from = pitch_type,  # Use pitch type as column names
+              names_prefix = "VAA_",  # Prefix for new columns to indicate they represent mean VAA values
+              values_from = mean_VAA) %>%
+  rename(year = game_year)  # Rename 'game_year' column to 'year'
+```
+
+###############################################################################    ################################# HAA by Pitch ################################ ###############################################################################
+
+```{r}
+#Create the Horizontal Approach Angle statistic for each pitch
+statcast <- statcast %>%
+  mutate(
+    vy_f = -sqrt(vy0^2 - (2 * ay * (50 - (17/12)))),
+    t = (vy_f - vy0) / ay,
+    vx_f = vx0 + (ax * t),
+    HAA = -atan(vx_f / vy_f) * (180 / pi)
+  )
+
+# Group data by pitcher, game year, and pitch type, then calculate the mean HAA for each group
+HAA_table <- statcast %>%
+  group_by(pitcher, game_year, pitch_type) %>%
+  summarise(mean_HAA = mean(HAA), .groups = 'drop') %>%  # Calculate mean HAA and drop grouping
+  # Handle missing or empty values for pitch_type by assigning them a category "NA"
+  mutate(pitch_type = ifelse(is.na(pitch_type) | pitch_type == "", "NA", pitch_type)) %>%
+  # Pivot the data to a wide format, making each pitch type's mean HAA a separate column
+  pivot_wider(id_cols = c("pitcher", "game_year"), 
+              names_from = pitch_type, 
+              names_prefix = "HAA_",  # Prefix for new columns to indicate they represent mean HAA values
+              values_from = mean_HAA) %>%
+  rename(year = game_year)  # Rename 'game_year' column to 'year'
+```
+
+###############################################################################    ################################# Stuff+ by pitch ############################# ###############################################################################
+
+```{r}
+
+#select the relevant columns for stuff+
+stuff_table <- fangraphs_table %>%
+  select( c(2,4,6,277:306))
+
+# Further select the relevant columns for stuff+
+
+overall_grades <- stuff_table %>% 
+  select(MLBAMID, Season,Pit_plus_CH, Pit_plus_CU, Pit_plus_FA, Pit_plus_SI, Pit_plus_SL, Pit_plus_KC, Pit_plus_FC, Pit_plus_FS, Pit_plus_FO, Pitching_plus) %>%
+    rename(pitcher = MLBAMID,
+         year = Season)
+```
+
+###############################################################################    ####################### Number of Plus Stuff Pitches ########################## ###############################################################################
+
+```{r}
+
+#remove the MLBAMID and Season column to apply the function below to this new dataframe
+overall_grades_1 <- stuff_table %>% 
+  select(Pit_plus_CH, Pit_plus_CU, Pit_plus_FA, Pit_plus_SI, Pit_plus_SL, Pit_plus_KC, Pit_plus_FC, Pit_plus_FS, Pit_plus_FO) 
+```
+
+```{r}
+# Define a function to count the number of pitches with values over 100 for each row
+
+number_of_stuff_pitches <- function(row) {
+  count_over_100 <- sum(row > 100, na.rm = T) # Count values over 100, ignore NA values
+  
+  return(count_over_100)
+}
+
+#Apply the function across rows of overall_grades_1 to calculate the number of "stuff" pitches
+
+  overall_grades$NumberofStuffPitches <- apply(overall_grades_1 ,1, number_of_stuff_pitches)
+
+# Select relevant columns from overall_grades, focusing on pitcher, year, and the calculated number of "stuff" pitches  
+    
+plus_stuff <- overall_grades %>%
+  select(pitcher, year, NumberofStuffPitches) %>%
+  rename(plus_stuff_pitches = NumberofStuffPitches)
+  
+```
+
+###############################################################################    ############ xwOBA - against  Also vs RHH and vs LHH ########################## ###############################################################################
+
+```{r}
+# estimated_woba_using_speedangle
+# woba_denom
+
+# Calculate overall xwOBA for each pitcher and game year, using estimated wOBA where actual wOBA is missing
+
+woba_table <- statcast %>%
+  group_by(pitcher, game_year) %>%
+  mutate(estimated_woba_using_speedangle = if_else(is.na(estimated_woba_using_speedangle), woba_value, estimated_woba_using_speedangle)) %>%
+  summarize(xwoba = sum(estimated_woba_using_speedangle, na.rm = T) /
+            sum(woba_denom, na.rm = T))
+
+# Calculate xwOBA specifically against left-handed batters
+
+woba_table_L <- statcast %>%
+  filter(stand == 'L') %>%
+  group_by(pitcher, game_year) %>%
+  mutate(estimated_woba_using_speedangle = if_else(is.na(estimated_woba_using_speedangle), woba_value, estimated_woba_using_speedangle)) %>%
+  summarize(xwoba_l = sum(estimated_woba_using_speedangle, na.rm = TRUE) /
+            sum(woba_denom, na.rm = TRUE)) %>%
+  mutate(xwoba_l = ifelse(is.infinite(xwoba_l), NA_real_, xwoba_l))
+
+
+summary(woba_table_L$xwoba_l)
+
+# Calculate xwOBA specifically against right-handed batters
+
+woba_table_R <- statcast %>%
+  filter(stand == 'R') %>%
+  mutate(estimated_woba_using_speedangle = if_else(is.na(estimated_woba_using_speedangle), woba_value, estimated_woba_using_speedangle)) %>%
+  group_by(pitcher, game_year) %>%
+  summarize(xwoba_r = sum(estimated_woba_using_speedangle, na.rm = T) /
+            sum(woba_denom, na.rm = T)) %>%
+  mutate(xwoba_r = ifelse(is.infinite(xwoba_r), NA_real_, xwoba_r))
+summary(woba_table_R$xwoba_r)
+
+# Merge the overall, left-handed, and right-handed xwOBA values into a single dataframe and rename columns
+
+woba_values <- woba_table %>%
+  left_join(woba_table_R, by = c('pitcher', 'game_year')) %>%
+  left_join(woba_table_L, by = c('pitcher', 'game_year')) %>%
+  rename(year = game_year)
+```
+
+###############################################################################    ################################# BB% and K% ################################## ###############################################################################
+
+```{r}
+#select the relevant columns for K-percentage and walk percentage
+bb_k_rates <- fangraphs_table %>%
+  select(MLBAMID, Season, K_pct,BB_pct ) %>%
+  rename(pitcher = MLBAMID,
+         year = Season)
+```
+
+###############################################################################    ########################### K / out  ########################################## ###############################################################################
+
+```{r}
+# Select relevant columns from the fangraphs_table and calculate strikeouts per out
+strikeouts_per_out <- fangraphs_table %>%
+  select(K_per_9, Season, MLBAMID, NameASCII) %>%
+  mutate(KsperOut = K_per_9 / 27) %>% #Calculate strikeouts per out
+  rename(pitcher = MLBAMID,
+         year = Season)
+```
+
+###############################################################################    ################################# Pitch Run Value ############################# ###############################################################################
+
+```{r}
+# Select the relevant pitch run value columns
+
+pitch_run_value <- fangraphs_table %>%
+  select(MLBAMID, Season, wFB_per_c, wSL_per_c, wCT_per_c, wCB_per_c, wCH_per_c, wSF_per_c, wKN_per_c, FA_pct_sc) %>%
+  rename(pitcher = MLBAMID,
+         year = Season)
+
+```
+
+###############################################################################    ################################# Fastball Endurance  ############################## ###############################################################################
+
+
+```{r}
+
+fastball_statcast <- statcast %>% 
+  filter(pitch_type == "FF") %>% # 2. Filter rows where `pitch_type` is "FF" (Four-Seam Fastball)
+  arrange(game_pk, pitcher, pitch_number_appearance) #  Arrange the filtered data by `game_pk`, `pitcher`, and `pitch_number_appearance` in ascending order
+
+library(zoo) 
+
+fastball_statcast <- fastball_statcast %>% 
+  group_by(game_year, game_pk, pitcher) %>% #Group the data by `game_year`, `game_pk`, and `pitcher`
+  mutate(rolling_avg_velocity = rollapply(release_speed, width = 3, FUN = mean, fill = NA, align = 'right', partial = TRUE)) # Calculate a rolling average of `release_speed` with a window of 3, filling missing values with NA, aligning the window to the right, and allowing partial windows
+
+
+
+summary(fastball_statcast$release_speed)
+```
+
+
+
+```{r}
+
+# Assuming 'fastballs' dataframe is already filtered for fastballs and arranged by pitcherid, game_pk, and pitch_order
+
+fastballs_with_threshold <- fastball_statcast %>%
+  group_by(game_year, game_pk, pitcher) %>%
+  # Calculate the row number within each game_pk and pitcher group
+  mutate(pitch_number_within_game = row_number()) %>%
+  # Add a new column with the rolling average velocity for the third pitch
+  # or use rolling_avg_velocity if there are fewer than three pitches
+  mutate(first_pitch_velocity = ifelse(pitch_number_within_game == 3, rolling_avg_velocity, 
+                                       ifelse(pitch_number_within_game < 3, rolling_avg_velocity, NA_real_))) %>%
+  # Fill NA values with the value from the third pitch or the last available pitch for each group
+  fill(first_pitch_velocity, .direction = "downup") %>%
+  ungroup()
+
+
+
+# Calculate the number of pitches until the pitcher matches or exceeds their first pitch velocity
+fastballs_matched_threshold <- fastballs_with_threshold %>%
+  group_by(game_year, game_pk, pitcher ) %>%
+  mutate(matched_first_velocity = rolling_avg_velocity <= first_pitch_velocity - 1.5,
+         pitch_count_to_match = cumsum(matched_first_velocity)) %>%
+  filter(matched_first_velocity) %>%
+  mutate(first_match_pitch = rank(pitch_number_appearance) == 1) %>%
+  filter(first_match_pitch) %>%
+  ungroup() %>%
+  select(game_year, game_pk,pitcher, pitch_number_appearance, rolling_avg_velocity, first_pitch_velocity, pitch_count_to_match)
+
+# This gives you a dataframe with each pitcher's first pitch that matches or exceeds their first pitch velocity in each game
+
+fastball_endurance <- fastballs_matched_threshold %>%
+  group_by(game_year, pitcher) %>%
+  summarise(avg_pitch_number_endurance = mean(pitch_number_appearance),
+            avg_rolling_avg_velocity = mean(rolling_avg_velocity),
+            avg_first_pitch_velocity = mean(first_pitch_velocity)) %>%
+  rename(year = game_year)
+
+
+```
+
+###############################################################################    ################################# xwoba By Times Faced  ############################## ###############################################################################
+
+
+
+```{r}
+
+
+# Calculate opposing team's xwoba for each pitcher in each game by times through the order
+xwoba_by_order <- statcast %>%
+  group_by(game_year, game_pk, pitcher, times_faced) %>%
+  mutate(estimated_woba_using_speedangle = if_else(is.na(estimated_woba_using_speedangle), woba_value, estimated_woba_using_speedangle)) %>% 
+  summarize(xwoba = sum(estimated_woba_using_speedangle, na.rm = T) /
+            sum(woba_denom, na.rm = T)) %>%
+  ungroup()
+
+
+
+
+```
+
+```{r}
+
+
+
+xwoba_by_order_wide <- statcast %>%
+  group_by(game_year, game_pk, pitcher, times_faced) %>%
+  summarize(
+    xwoba = sum(if_else(is.na(estimated_woba_using_speedangle), woba_value, estimated_woba_using_speedangle), na.rm = TRUE) /
+             sum(woba_denom, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  # Transform the dataset from long to wide
+  pivot_wider(
+    names_from = times_faced,
+    names_prefix = "xwoba_times_faced_",
+    values_from = xwoba
+  )
+
+
+
+xwoba_by_order_summary <- xwoba_by_order_wide %>%
+  group_by(game_year, pitcher) %>%
+  summarise(xwoba_times_faced_1 = mean(xwoba_times_faced_1, na.rm = TRUE),
+            xwoba_times_faced_2 = mean(xwoba_times_faced_2, na.rm = TRUE),
+            xwoba_times_faced_3 = mean(xwoba_times_faced_3, na.rm = TRUE),
+            xwoba_times_faced_4 = mean(xwoba_times_faced_4, na.rm = TRUE),
+            xwoba_times_faced_5 = mean(xwoba_times_faced_5, na.rm = TRUE))
+
+#Calculate differential statistics for xwoba for times faced
+
+xwoba_by_order_summary <- xwoba_by_order_summary %>%
+  mutate(xwoba_faced_diff_1_2 = xwoba_times_faced_2 - xwoba_times_faced_1,
+         xwoba_faced_diff_2_3 = xwoba_times_faced_3 - xwoba_times_faced_2) %>%
+  rename(year = game_year)
+
+#replace INF and -INF values with NA
+
+xwoba_by_order_summary <- xwoba_by_order_summary %>%
+  mutate(xwoba_faced_diff_1_2 = ifelse(xwoba_faced_diff_1_2 == Inf | xwoba_faced_diff_1_2 == -Inf, NA, xwoba_faced_diff_1_2))
+
+
+
+
+```
+
+
+###############################################################################    ################################# Pitch Type Percentage by Times Faced  ############################## ###############################################################################
+
+```{r}
+
+# Calculate the pitch type percentages
+pitch_type_percentages_wide <- statcast %>%
+  group_by(game_year, game_pk, pitcher, times_faced, pitch_type) %>%
+  summarize(pitch_count = n(), .groups = 'drop') %>%
+  group_by(game_year, game_pk, pitcher, times_faced) %>%
+  mutate(total_pitches = sum(pitch_count)) %>%
+  ungroup() %>%
+  mutate(pitch_type_percentage = pitch_count / total_pitches)
+
+pitch_type_percentages_wide1 <- pitch_type_percentages_wide %>%
+  # Transform the dataset from long to wide for each times_faced and pitch_type
+  pivot_wider(
+    id_cols = c(game_year, game_pk, pitcher),
+    names_from = c(times_faced, pitch_type),
+    names_prefix = "pitch_type_percentage_",
+    values_from = pitch_type_percentage,
+    values_fill = list(pitch_type_percentage = 0)  # Fill missing values with 0
+  )
+
+# Summarize the pitch type percentages by mean for each times faced across all games
+pitch_type_percentages_summary <- pitch_type_percentages_wide1 %>%
+  group_by(game_year, pitcher) %>%
+  summarize(across(starts_with("pitch_type_percentage_"), mean, na.rm = TRUE))
+
+#calculate differential statistcs for each pitch type for times_faced 1 and 2
+
+pitch_type_percentages_summary2 <- pitch_type_percentages_summary %>%
+  mutate(across(
+    .cols = matches("percentage_2"),
+    .fns = ~ . - get(str_replace(cur_column(), "2", "1")),
+    .names = "diff_{str_replace(.col, 'percentage_2', 'percentage_1_2_diff')}"
+  ))
+
+#calculate differential statistcs for each pitch type for times_faced 2 and 3
+
+pitch_type_percentages_summary2 <- pitch_type_percentages_summary2 %>%
+  mutate(across(
+    .cols = matches("percentage_3"),
+    .fns = ~ . - get(str_replace(cur_column(), "3", "2")),
+    .names = "diff_{str_replace(.col, 'percentage_3', 'percentage_2_3_diff')}"
+  )) %>%
+  rename(year = game_year)
+#replace INF and -INF values with NA
+
+pitch_type_percentages_summary2 <- pitch_type_percentages_summary2 %>%
+  mutate(across(
+    .cols = matches("diff_"),
+    .fns = ~ ifelse(is.infinite(.), NA_real_, .)
+  ))
+```
+
+
+###############################################################################    ################################# Combine Tables ############################## ###############################################################################
+
+```{r}
+#combine all the tables 
+
+pitcher_characteristics_metrics <- pitch_usage %>%
+  left_join(pitch_velo_movement, by = c('pitcher', 'year')) %>%
+  left_join(VAA_table, by = c('pitcher', 'year')) %>%
+  left_join(HAA_table, by = c('pitcher', 'year')) %>%
+  left_join(overall_grades, by = c('pitcher', 'year')) %>%
+  left_join(plus_stuff, by = c('pitcher', 'year')) %>%
+  left_join(woba_values, by = c('pitcher', 'year')) %>%
+  left_join(bb_k_rates, by = c('pitcher', 'year')) %>%
+  left_join(strikeouts_per_out, by = c('pitcher', 'year')) %>%
+  left_join(pitch_run_value, by = c('pitcher', 'year')) %>%
+  left_join(pitch_type_percentages_summary2, by = c('pitcher', 'year')) %>%
+  left_join(xwoba_by_order_summary, by = c('pitcher', 'year')) %>%
+  left_join(fastball_endurance, by = c('pitcher', 'year'))
+
+```
+
+```{r}
+pitcher_roles <- read.csv("pitcher_roles.csv")
+```
+
+```{r}
+pitcher_characteristics_metrics <- pitcher_characteristics_metrics %>%
+  left_join(pitcher_roles, by = c('pitcher','year'))
+```
+
+
+
+```{r}
+
+write.csv(pitcher_characteristics_metrics, "full_table.csv")
+```
+
+
+## Step 4
+
+### Identify Usage Outliers and Alternative Matches
+
+```{r warning=FALSE}
+library(tidyverse)
+library(glue)
+
+full_table <- read.csv('full_table.csv') %>%
+  select(-X.1)
+  
+```
+
+
+
+
+
+###############################################################################
+######################## Loop Clustering ######################################
+###############################################################################
+
+```{r initial lists}
+#create intial groups of variables
+
+fb_shape <- c('FA_X_sc', 'FA_Z_sc', 'vFA_sc')
+sl_shape <- c('SL_X_sc', 'SL_Z_sc', 'vSL_sc')
+fc_shape <- c('FC_X_sc', 'FC_Z_sc', 'vFC_sc')
+cu_shape <- c('CU_X_sc', 'CU_Z_sc', 'vCU_sc')
+kc_shape <- c('KC_X_sc', 'KC_Z_sc', 'vKC_sc')
+ch_shape <- c('CH_X_sc', 'CH_Z_sc', 'vCH_sc')
+sc_shape <- c('SC_X_sc', 'SC_Z_sc', 'vSC_sc')
+fo_shape <- c('FO_X_sc', 'FO_Z_sc', 'vFO_sc')
+si_shape <- c('SI_X_sc', 'SI_Z_sc', 'vSI_sc')
+fs_shape <- c('FS_X_sc', 'FS_Z_sc', 'vFS_sc')
+
+fb_usage <- 'FA_pct'
+sl_usage <- 'SL_pct'
+ct_usage <- 'CT_pct'
+cb_usage <- 'CB_pct'
+ch_usage <- 'CH_pct'
+sf_usage <- 'SF_pct'
+
+fb_stuff <- 'Pit_plus_FA'
+sl_stuff <- 'Pit_plus_SL'
+cb_stuff <- 'Pit_plus_CU'
+ch_stuff <- 'Pit_plus_CH'
+kc_stuff <-  'Pit_plus_KC'
+si_stuff <- 'Pit_plus_SI'
+fc_stuff <- 'Pit_plus_FC'
+fs_stuff <- 'Pit_plus_FS'
+fo_stuff <- 'Pit_plus_FO'
+
+fb_VAA <- 'VAA_FF'
+sl_VAA <- 'VAA_SL'
+CB_VAA <- 'VAA_CU'
+CH_VAA <- 'VAA_CH'
+KC_VAA <- 'VAA_KC'
+SI_VAA <- 'VAA_SI'
+FC_VAA <- 'VAA_FC'
+FS_VAA <- 'VAA_FS'
+FO_VAA <- 'VAA_FO'
+
+fb_HAA <- 'HAA_FF'
+sl_HAA <- 'HAA_SL'
+CB_HAA <- 'HAA_CU'
+CH_HAA <- 'HAA_CH'
+KC_HAA <- 'HAA_KC'
+SI_HAA <- 'HAA_SI'
+FC_HAA <- 'HAA_FC'
+FS_HAA <- 'HAA_FS'
+FO_HAA <- 'HAA_FO'
+
+
+
+number_of_Stuff <- 'NumberofStuffPitches'
+pitching_plus <- 'Pitching_plus'  
+
+fb_per_c <- "wFB_per_c"
+sl_per_c <- "wSL_per_c"
+ct_per_c <- "wCT_per_c"
+cb_per_c <- "wCB_per_c"
+ch_per_c <- "wCH_per_c"
+
+xwoba <- 'xwoba'
+xwoba_L <- 'xwoba_r'
+xwoba_R <- 'xwoba_l'
+
+K_pct <- 'K_pct'
+BB_pct <- 'BB_pct'
+K_per_9 <- 'K_per_9'
+KsperOut <- 'KsperOut'
+
+fastball_endurance <- 'avg_pitch_number_endurance'
+
+diff_1_2_FF <- 'diff_pitch_type_percentage_1_2_diff_FF'
+diff_2_3_FF <- 'diff_pitch_type_percentage_2_3_diff_FF'
+
+diff_1_2_SL <- 'diff_pitch_type_percentage_1_2_diff_SL'
+diff_2_3_SL <- 'diff_pitch_type_percentage_2_3_diff_SL'
+
+diff_1_2_CH <- 'diff_pitch_type_percentage_1_2_diff_CH'
+diff_2_3_CH <- 'diff_pitch_type_percentage_2_3_diff_CH'
+
+diff_1_2_CU <- 'diff_pitch_type_percentage_1_2_diff_CU'
+diff_2_3_CU <- 'diff_pitch_type_percentage_2_3_diff_CU'
+
+xwoba_1_2 <- 'xwoba_faced_diff_1_2'
+xwoba_2_3 <- 'xwoba_faced_diff_2_3'
+```
+
+```{r combined lists}
+
+# create list vectors these will be applied to various iterations of model
+
+fb_dom <- c(fb_shape, fb_usage, fb_stuff, fb_per_c, KsperOut)
+fb_sl <- c(fb_per_c, sl_per_c, fb_shape, sl_shape, fb_stuff, sl_stuff)
+fb_cu_ch_stuff <- c(fb_stuff, cb_stuff, ch_stuff, number_of_Stuff,pitching_plus)
+fb_ch <- c(fb_per_c, ch_per_c, fb_shape, ch_shape, fb_stuff, ch_stuff)
+arsenal_depth <- c(number_of_Stuff, pitching_plus)
+
+
+fc_ch <- c(fb_per_c, ch_per_c, fc_shape, ch_shape, fc_stuff, ch_stuff)
+fs_ch <- c(fb_per_c, ch_per_c, fs_shape, ch_shape, fs_stuff, ch_stuff)
+si_ch <- c(fb_per_c, ch_per_c, si_shape, ch_shape, si_stuff, ch_stuff)
+
+fc_cb <- c(fb_per_c, cb_per_c, fc_shape, cu_shape, fc_stuff, cb_stuff)
+fs_cb <- c(fb_per_c, cb_per_c, fs_shape, cu_shape, fs_stuff, cb_stuff)
+si_cb <- c(fb_per_c, cb_per_c, si_shape, cu_shape, si_stuff, cb_stuff)
+
+
+fc_sl <- c(fb_per_c, sl_per_c, fc_shape, sl_shape, fc_stuff, sl_stuff)
+fs_sl <- c(fb_per_c, sl_per_c, fs_shape, sl_shape, fs_stuff, sl_stuff)
+si_sl <- c(fb_per_c, sl_per_c, si_shape, sl_shape, si_stuff, sl_stuff)
+
+fb_cb <- c(fb_per_c, cb_per_c, fb_shape, cu_shape, fb_stuff, cb_stuff)
+cb_dom <- c(cu_shape, cb_usage, cb_stuff, cb_per_c, KsperOut)
+ch_dom <- c(ch_shape, ch_usage, ch_stuff, ch_per_c, KsperOut)
+sl_dom <- c(sl_shape, sl_usage, sl_stuff, sl_per_c, KsperOut)
+
+
+
+being_used <- c(fb_usage,sl_usage,ct_usage,cb_usage,ch_usage,sf_usage)
+bbk <- c(K_pct, BB_pct)
+xwoba_kman <- c(xwoba,K_pct,K_per_9, KsperOut)
+kman <- c(K_pct,K_per_9,KsperOut)
+x_wman <- c(xwoba,xwoba_R,xwoba_L)
+
+sonyx_walkman <- c(xwoba,BB_pct)
+
+x_wman_R <- c(xwoba,xwoba_R)
+
+x_wman_L <- c(xwoba,xwoba_R)
+
+
+fb_combined <- c(fb_shape, fb_usage, fb_stuff, fb_per_c, fb_VAA, fb_HAA)
+sl_combined <- c(sl_shape, sl_usage, sl_stuff, sl_per_c, sl_VAA, sl_HAA)
+cut_combined <- c(fc_shape, ct_usage, fc_stuff, ct_per_c, FC_VAA, FC_HAA)
+cb_combined <- c(cu_shape, cb_usage, cb_stuff, cb_per_c, CB_VAA, CB_HAA)
+ch_combined <- c(ch_shape, ch_usage, ch_stuff, ch_per_c, CH_VAA, CH_HAA)
+si_combined <- c(si_shape, si_stuff, SI_VAA, SI_HAA)
+
+
+
+fb_si_sl <- c(fb_combined, sl_combined, si_combined)
+fb_ch_cb <- c(fb_combined, ch_combined, cb_combined)
+fb_si_ch_sl <- c(fb_combined, si_combined, ch_combined, sl_combined)
+
+
+starter_pls <- c(fastball_endurance, xwoba_1_2)
+
+fastball_diff12 <- c(fastball_endurance, diff_1_2_FF, xwoba_1_2)
+fastball_diff23 <- c(fastball_endurance, diff_2_3_FF, xwoba_2_3)
+fastball_difffull <- c(fastball_endurance, diff_1_2_FF, diff_2_3_FF, xwoba)
+
+pitch_arsenal_difffull <- c(fastball_endurance, diff_1_2_FF, diff_2_3_FF, xwoba, diff_1_2_SL, diff_2_3_SL, diff_1_2_CH, diff_2_3_CH, number_of_Stuff)
+
+pitch_arsenal_difffull_CB <- c(fastball_endurance, diff_1_2_FF, diff_2_3_FF, xwoba,  diff_1_2_SL, diff_2_3_SL, diff_1_2_CH, diff_2_3_CH, diff_1_2_CU, diff_2_3_CU, number_of_Stuff)
+
+performance_metrics <- c(xwoba,K_pct, BB_pct, K_per_9, KsperOut)
+
+#################################
+
+#The model is looped over this list of lists
+
+list_of_lists <- list(fb_dom, fb_sl, fb_cu_ch_stuff, fb_ch, arsenal_depth,
+                      fc_ch, fc_cb, fc_sl, fb_cb, cb_dom,
+                      ch_dom, sl_dom, being_used, bbk, si_cb,si_ch,si_sl, xwoba_kman, 
+                      kman,sonyx_walkman, fb_si_sl, fb_ch_cb, fb_si_ch_sl, fastball_endurance, starter_pls, xwoba_1_2, xwoba_2_3, xwoba_L, xwoba_R, fastball_diff12, fastball_diff23, fastball_difffull, pitch_arsenal_difffull, pitch_arsenal_difffull_CB)
+
+
+
+length(list_of_lists)
+
+```
+
+```{r loop clustering}
+
+#clusters_of_interest looks for clusters with a clear majority and outliers for their respective role classification (innings, leverage, matchup, length) 
+
+clusters_of_interest <- data.frame(list_object = integer(),
+                                   cluster = integer(),
+                                   role = character(),
+                                   df = I(list()),
+                                   stringsAsFactors = FALSE)  # Initialize with proper column names
+
+for (number in seq_along(list_of_lists)) {
+  selected_table <- full_table[, list_of_lists[[number]]] %>%
+    na.omit() %>%
+    scale() 
+  
+col_names <- colnames(selected_table)
+  
+  
+num_centers <- ceiling(nrow(selected_table)/10)
+
+  set.seed(1990)
+  fit <- kmeans(x = selected_table,
+                centers = num_centers,
+                nstart = 25,
+                iter.max = 100)
+
+  clusters <- fit$cluster
+
+  for (i in 1:num_centers) {
+    cluster_table <- full_table[clusters == i, ]
+    
+######################
+############ Innings
+######################
+    
+    if (nrow(cluster_table) >= 8) {
+      start_count <- sum(cluster_table$innings_role == 'start', na.rm = TRUE)
+      middle_count <- sum(cluster_table$innings_role == 'middle', na.rm = TRUE)
+      late_count <- sum(cluster_table$innings_role == 'late', na.rm = TRUE)
+      
+      if (start_count >= (nrow(cluster_table) - 2)) {
+        print(glue::glue('List: {number}, Cluster: {i}, Role: Innings'))
+        new_row <- data.frame(list_object = number,
+                              cluster = i,
+                              role = 'Innings',
+                              df = cluster_table,
+                              stringsAsFactors = FALSE)
+        
+        clusters_of_interest <- rbind(clusters_of_interest, new_row)
+      } else if (middle_count >= (nrow(cluster_table) - 2)) {
+        print(glue::glue('List: {number}, Cluster: {i}, Role: Innings'))
+        new_row <- data.frame(list_object = number,
+                              cluster = i,
+                              role = 'Innings',
+                              df = cluster_table,
+                              stringsAsFactors = FALSE)
+        
+        clusters_of_interest <- rbind(clusters_of_interest, new_row)
+      } else if (late_count >= (nrow(cluster_table) - 2)) {
+        print(glue::glue('List: {number}, Cluster: {i}, Role: Innings'))
+        new_row <- data.frame(list_object = number,
+                              cluster = i,
+                              role = 'Innings',
+                              df = cluster_table,
+                              stringsAsFactors = FALSE)
+        
+        clusters_of_interest <- rbind(clusters_of_interest, new_row)
+      }    
+    }
+    
+    
+    
+######################
+############ Length
+######################
+    
+    if (nrow(cluster_table) >= 8) {
+      short_count <- sum(cluster_table$length_role == 'short', na.rm = TRUE)
+      medium_count <- sum(cluster_table$length_role == 'medium', na.rm = TRUE)
+      long_count <- sum(cluster_table$length_role == 'long', na.rm = TRUE)
+      
+      if (short_count >= (nrow(cluster_table) - 2)) {
+        print(glue::glue('List: {number}, Cluster: {i}, Role: Length'))
+        new_row <- data.frame(list_object = number,
+                              cluster = i,
+                              role = 'Length',
+                              df = cluster_table,
+                              stringsAsFactors = FALSE)
+        
+        clusters_of_interest <- rbind(clusters_of_interest, new_row)
+      } else if (medium_count >= (nrow(cluster_table) - 2)) {
+        print(glue::glue('List: {number}, Cluster: {i}, Role: Length'))
+        new_row <- data.frame(list_object = number,
+                              cluster = i,
+                              role = 'Length',
+                              df = cluster_table,
+                              stringsAsFactors = FALSE)
+        
+        clusters_of_interest <- rbind(clusters_of_interest, new_row)
+      } else if (long_count >= (nrow(cluster_table) - 2)) {
+        print(glue::glue('List: {number}, Cluster: {i}, Role: Length'))
+        new_row <- data.frame(list_object = number,
+                              cluster = i,
+                              role = 'Length',
+                              df = cluster_table,
+                              stringsAsFactors = FALSE)
+        
+        clusters_of_interest <- rbind(clusters_of_interest, new_row)
+      }
+    }
+    
+    
+######################   
+############ Matchup
+######################
+   
+        if (nrow(cluster_table) >= 8) {
+      rhh_count <- sum(cluster_table$matchup_role == 'RHH', na.rm = TRUE)
+      lhh_count <- sum(cluster_table$leverage_role == 'LHH', na.rm = TRUE)
+      none_count <- sum(cluster_table$leverage_role == 'none', na.rm = TRUE)
+
+      
+      if (rhh_count >= (nrow(cluster_table) - 2)) {
+        print(glue::glue('List: {number}, Cluster: {i}, Role: Matchup'))
+        new_row <- data.frame(list_object = number,
+                              cluster = i,
+                              role = 'Matchup',
+                              df = cluster_table,
+                              stringsAsFactors = FALSE)
+  
+        clusters_of_interest <- rbind(clusters_of_interest, new_row)
+        
+        
+      } else if (lhh_count >= (nrow(cluster_table) - 2)) {
+        print(glue::glue('List: {number}, Cluster: {i}, Role: Matchup'))
+        new_row <- data.frame(list_object = number,
+                              cluster = i,
+                              role = 'Matchup',
+                              df = cluster_table,
+                              stringsAsFactors = FALSE)
+        
+        clusters_of_interest <- rbind(clusters_of_interest, new_row)
+      } else if (none_count >= (nrow(cluster_table) - 2)) {
+        print(glue::glue('List: {number}, Cluster: {i}, Role: Matchup'))
+        new_row <- data.frame(list_object = number,
+                              cluster = i,
+                              role = 'Matchup',
+                              df = cluster_table,
+                              stringsAsFactors = FALSE)
+        
+        clusters_of_interest <- rbind(clusters_of_interest, new_row)
+      }
+    }
+    
+    
+     
+
+######################
+############ Leverage
+######################
+
+    if (nrow(cluster_table) >= 8) {
+      high_count <- sum(cluster_table$leverage_role == 'high', na.rm = TRUE)
+      low_count <- sum(cluster_table$leverage_role == 'low', na.rm = TRUE)
+
+      if (high_count >= (nrow(cluster_table) - 2)) {
+        print(glue::glue('List: {number}, Cluster: {i}, Role: Leverage'))
+        new_row <- data.frame(list_object = number,
+                              cluster = i,
+                              role = 'Leverage',
+                              df = cluster_table,
+                              stringsAsFactors = FALSE)
+        
+        clusters_of_interest <- rbind(clusters_of_interest, new_row)
+      } else if (low_count >= (nrow(cluster_table) - 2)) {
+        print(glue::glue('List: {number}, Cluster: {i}, Role: Leverage'))
+        new_row <- data.frame(list_object = number,
+                              cluster = i,
+                              role = 'Leverage',
+                              df = cluster_table,
+                              stringsAsFactors = FALSE)
+        
+        clusters_of_interest <- rbind(clusters_of_interest, new_row)
+      }
+    }
+    
+    
+    
+    
+  }
+}
+
+names(clusters_of_interest) <- str_remove_all(names(clusters_of_interest), "^df\\.")
+```
+
+
+###############################################################################
+###################### Performance Checks #####################################
+###############################################################################
+
+```{r performance checks}
+#performance_matches looks for clusters that fit certain criteria to suggest that the outlier could perform better in the majority's role
+
+performance_matches <- data.frame()
+
+for(i in 1:nrow(clusters_of_interest)){
+
+list_object_number <- clusters_of_interest[i,1]
+cluster_number <- clusters_of_interest[i,2]
+check_role <- clusters_of_interest[i,3]
+  
+exploration_table <- clusters_of_interest %>%
+    filter(list_object == list_object_number & cluster == cluster_number) %>%
+    select(role, pitcher, inning_role, length_role, matchup_role, 
+           leverage_role, xwoba, IP) %>% # Assuming 'IP' is the column for Innings Pitched
+    filter(IP > 5)
+
+if(nrow(exploration_table) < 5){
+  next
+}
+
+######################
+############ Inning
+######################
+
+inning_role_counts <- table(exploration_table$inning_role)
+max_cat <- names(inning_role_counts)[which.max(inning_role_counts)]
+
+max_table <- exploration_table %>%
+  filter(inning_role == max_cat)
+min_table <- exploration_table %>%
+  filter(inning_role != max_cat)
+
+
+max_q3 <- quantile(max_table$xwoba, probs = 0.75)
+
+if(any(min_table$xwoba > max_q3) & check_role == 'Inning') {
+  new_row <- data.frame(list_object = list_object_number,
+                        cluster = cluster_number,
+                        role = 'Inning')
+
+  performance_matches <- rbind(performance_matches, new_row)
+}
+
+
+
+######################
+############ Length
+######################
+
+length_role_counts <- table(exploration_table$length_role)
+max_cat <- names(length_role_counts)[which.max(length_role_counts)]
+
+max_table <- exploration_table %>%
+  filter(length_role == max_cat)
+min_table <- exploration_table %>%
+  filter(length_role != max_cat)
+
+
+max_q3 <- quantile(max_table$xwoba, probs = 0.75)
+
+if(any(min_table$xwoba > max_q3) & check_role == 'Length') {
+  new_row <- data.frame(list_object = list_object_number,
+                        cluster = cluster_number,
+                        role = 'Length')
+
+  performance_matches <- rbind(performance_matches, new_row)
+}
+######################
+############ Matchup
+######################
+
+matchup_role_counts <- table(exploration_table$matchup_role)
+max_cat <- names(matchup_role_counts)[which.max(matchup_role_counts)]
+
+max_table <- exploration_table %>%
+  filter(matchup_role == max_cat)
+min_table <- exploration_table %>%
+  filter(matchup_role != max_cat)
+
+
+max_q3 <- quantile(max_table$xwoba, probs = 0.75)
+
+if(any(min_table$xwoba > max_q3) & check_role == 'Matchup') {
+  new_row <- data.frame(list_object = list_object_number,
+                        cluster = cluster_number,
+                        role = 'Matchup')
+
+  performance_matches <- rbind(performance_matches, new_row)
+}
+
+######################
+############ Leverage
+######################
+
+# Look for clusters where everyone is below 25th percentile of population woba where
+# the minority is low leverage
+
+population_xwoba <- mean(full_table$xwoba)
+population_xwoba_q1 <- quantile(full_table$xwoba, probs = 0.25)
+population_xwoba_q3 <- quantile(full_table$xwoba, probs = 0.75)
+
+
+leverage_role_counts <- table(exploration_table$leverage_role)
+max_cat <- names(leverage_role_counts)[which.max(leverage_role_counts)]
+min_table <- exploration_table %>%
+  filter(leverage_role != max_cat)
+
+if(all(exploration_table$xwoba < population_xwoba_q1) & max_cat == 'high' &
+        check_role == 'Leverage') {
+  new_row <- data.frame(list_object = list_object_number,
+                        cluster = cluster_number,
+                        role = 'Leverage')
+
+  performance_matches <- rbind(performance_matches, new_row)
+}
+
+
+
+# Look for where the minority is high leverage and HE is bad
+
+if(max_cat == 'low' & any(min_table$xwoba > population_xwoba_q3) & 
+   any(min_table$year) == 2023 & check_role == 'Leverage') {
+  new_row <- data.frame(list_object = list_object_number,
+                        cluster = cluster_number,
+                        role = 'Leverage')
+
+  performance_matches <- rbind(performance_matches, new_row)
+}
+
+
+}
+
+performance_matches <- unique(performance_matches)
+
+
+```
+# Recommendations
+
+Here we select three specific pitchers that we recommend to switch their respective role based on the performance metrics and clusters of interest
+
+```{r}
+clusters_1 <- clusters_of_interest %>%
+  filter(list_object == 32 & cluster == 113) %>%
+  select(name, throws, pitcher, year, IP, number_of_Stuff,leverage_role, length_role, xwoba, list_of_lists[[32]])
+clusters_1
+
+list_of_lists[[32]]
+
+TommyMilone <- clusters_1[2,]
+
+```
+
+
+################### Milone Analysis ######################################
+
+This cluster was based on endurance and usage through multiple times around the order. Out of this specific cluster, we chose to focus on Tommy Milone. Unlike his counterparts with significant innings, Milone did not fall in the short length role. Do to his high xwoba and his lack of success multiple times through an order, we feel he would improve in the shorter role. His xwoba could conceivably decrease in a shorter role because he would only have to face hitters once which is important for a pitcher with only two quality pitches. Milone looks to have a very short arsenal which is getting penalized by longer outings/multiple times facing the same hitter. 
+
+
+```{r}
+clusters_2 <- clusters_of_interest %>%
+  filter(list_object == 34 & cluster == 122) %>%
+  select(name, throws, pitcher, year, IP, length_role, xwoba, list_of_lists[[34]])
+
+clusters_2
+ 
+RyanWeathers <- clusters_2[1,]
+
+list_of_lists[[34]]
+
+RyanWeathers2 <- full_table %>%
+  filter(name == "Ryan Weathers")
+head(RyanWeathers2)
+head(RyanWeathers2$pitch_type_percentage_2_SL)
+
+mean(full_table$avg_pitch_number_endurance, na.rm = TRUE)
+```
+
+
+####################### Ryan Weathers ###########################################################################
+
+This cluster focus on how many pitches it takes a pitcher to drop, his usage of different pitches multiple times through the order, and his number of quality pitches. We feel that Weather would improve being moved to a short length role because of his lack of multiple good pitches and his pitch usage through the game. His xwOBA would improve if he only had to face a hitter once per game.  
+
+
+```{r}
+clusters_3 <- clusters_of_interest %>%
+  filter(list_object == 19 & cluster == 116) %>%
+  select(name, throws, pitcher, year, IP, length_role,leverage_role, xwoba, list_of_lists[[19]])
+clusters_3
+
+MichaelKopech <- clusters_3[1,]
+MichaelKopech2 <- full_table %>%
+  filter(name == "Michael Kopech")
+head(MichaelKopech2)
+
+list_of_lists[[19]]
+```
+
+######################################### Michael Kopech ########################################################################
+
+This cluster focuses on strikeouts. Right now Kopech does not have a length or leverage role associated with him. Due to his good strikeout rates and very low xwOBA we feel that he could have success in short high leverage situations. His metrics line up closely with the others in this cluster that are in high leverage and short roles. 
+
+### Visualizations Appendix
+
+```{r}
+Kopech_data <- clusters_of_interest %>%
+  mutate(Kopech = if_else(name == 'Michael Kopech', 'Michael Kopech', 'Other'))
+
+Kopech_boxplot <- ggplot(Kopech_data,
+                         aes(x = factor(Kopech),
+                             y = K_pct,
+                             fill = factor(Kopech))) +
+  geom_boxplot() +
+  labs(x = "Kopech", y = "K Percentage") +
+  scale_fill_manual(values = c("Michael Kopech" = "blue", "Other" = "gray"))  # Adjust colors as needed
+
+print(Kopech_boxplot)
+
+```
+This boxplot shows that during Kopech's three years he has a substantially higher Strikeout percentage compared to the rest of the pitchers in the data set. 
+
+```{r}
+graph_cluster_1 <- clusters_of_interest %>%
+mutate(in_cluster = if_else(list_object == 18 & cluster == 150, 1,0))
+graph_cluster_1
+
+```
+
+
+```{r}
+g_1<- ggplot(graph_cluster_1,
+              aes(x = K_pct,
+                  fill = factor(in_cluster))) + 
+  geom_density(alpha = 0.7) 
+g_1
+```
+
+```{r}
+graph_cluster_2 <- clusters_of_interest %>%
+mutate(in_cluster = if_else(list_object == 20 & cluster == 158, 1,0))
+graph_cluster_2
+```
+```{r}
+g_2 <- ggplot(graph_cluster_2, # Set data set
+              aes(x = BB_pct, # Set total distance as x-axis variable
+                  fill = factor(in_cluster))) + # Set injury as fill
+  geom_density(alpha = 0.7) 
+g_2
+```
+
+```{r}
+graph_cluster_3 <- clusters_of_interest %>%
+mutate(in_cluster = if_else(list_object == 5 & cluster == 1, 1,0))
+graph_cluster_3
+```
+
+
+```{r}
+g_3 <- ggplot(graph_cluster_3,
+              aes(x = NumberofStuffPitches, 
+                  fill = factor(in_cluster))) +
+  geom_density(alpha = 0.7) 
+g_3
+```
+
+
+
+
+```{r}
+
+RyanWeathers3 <- pitch_type_percentages_wide %>%
+  filter(pitcher == "677960" & game_year == "2021") %>%
+  group_by(pitcher, times_faced, pitch_type) %>%
+  summarise(pitch_type_percentage = mean(pitch_type_percentage))
+
+g_5 <- ggplot(data = RyanWeathers3, aes(x = times_faced, y = pitch_type_percentage, color = pitch_type)) +
+  geom_line(stat = "identity") + 
+  
+  labs(
+    x = "Times Face",
+    y = "Pitch Type Percentage",
+    title = "Ryan Weathers 2021 Pitch Type Percentage by Times Faced"
+  ) 
+
+g_5
+
+
+ 
+
+```
+
+```{r}
+RyanWeathers4 <- full_table %>%
+  filter(pitcher == "543548" & year == "2021") 
+head(RyanWeathers4)
+
+RyanWeathers4_long <- RyanWeathers4 %>%
+  pivot_longer(
+    cols = starts_with("Pit_plus_"), 
+    names_to = "measurement", 
+    values_to = "value"
+  )
+```
+
+
+```{r}
+
+TommyMilone3 <- pitch_type_percentages_wide %>%
+  filter(pitcher == "543548" & game_year == "2023") %>%
+  group_by(pitcher, times_faced, pitch_type) %>%
+  summarise(pitch_type_percentage = mean(pitch_type_percentage))
+
+g_6 <- ggplot(data = TommyMilone3, aes(x = times_faced, y = pitch_type_percentage, color = pitch_type)) +
+  geom_line(stat = "identity") + 
+  
+  labs(
+    x = "Times Face",
+    y = "Pitch Type Percentage",
+    title = "Tommy Milone 2023 Pitch Type Percentage by Times Faced"
+  ) 
+
+g_6
+
+
+ 
+
+```
